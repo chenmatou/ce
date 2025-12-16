@@ -1,0 +1,86 @@
+name: Build and Obfuscate BPB Panel
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 1 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install obfuscator (local, NOT global)
+        run: |
+          npm init -y
+          npm install javascript-obfuscator@4.1.0
+
+      - name: Download BPB worker.js
+        run: |
+          PRIMARY_URL="https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/download/v4.0.1/worker.js"
+          FALLBACK_URLS=(
+            "https://raw.githubusercontent.com/bia-pain-bache/BPB-Worker-Panel/main/build/unobfuscated-worker.js"
+            "https://cdn.jsdelivr.net/gh/bia-pain-bache/BPB-Worker-Panel@main/build/unobfuscated-worker.js"
+            "https://ghproxy.com/https://raw.githubusercontent.com/bia-pain-bache/BPB-Worker-Panel/main/build/unobfuscated-worker.js"
+          )
+
+          echo "Downloading worker.js"
+          if curl -fsSL "$PRIMARY_URL" -o origin.js; then
+            echo "Primary OK"
+          else
+            OK=false
+            for u in "${FALLBACK_URLS[@]}"; do
+              if curl -fsSL "$u" -o origin.js; then
+                OK=true
+                break
+              fi
+            done
+            if [ "$OK" != "true" ]; then
+              echo "Download failed"
+              exit 1
+            fi
+          fi
+
+      - name: Stage 1 Obfuscation
+        run: |
+          npx javascript-obfuscator origin.js \
+            --output stage1.js \
+            --compact false \
+            --dead-code-injection true \
+            --dead-code-injection-threshold 0.2 \
+            --string-array true \
+            --string-array-threshold 1 \
+            --identifier-names-generator hexadecimal \
+            --seed 9527
+
+      - name: Stage 2 Obfuscation
+        run: |
+          npx javascript-obfuscator stage1.js \
+            --output _worker.js \
+            --compact true \
+            --control-flow-flattening true \
+            --control-flow-flattening-threshold 0.9 \
+            --string-array true \
+            --string-array-encoding rc4 \
+            --string-array-threshold 1 \
+            --numbers-to-expressions true \
+            --unicode-escape-sequence true \
+            --seed 9527
+
+      - name: Commit Result
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "build: obfuscated BPB worker"
