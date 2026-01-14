@@ -1,11 +1,11 @@
-name: Build and Obfuscate BPB Panel
+name: Build Stable BPB Panel
 
 on:
   push:
     branches:
       - main
   schedule:
-    - cron: "0 1 * * *"
+    - cron: "0 2 * * *" # 每天凌晨2点运行，避开高峰期
 
 permissions:
   contents: write
@@ -23,64 +23,69 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install obfuscator (local, NOT global)
+      - name: Install obfuscator
         run: |
           npm init -y
           npm install javascript-obfuscator@4.1.0
 
-      - name: Download BPB worker.js
+      - name: Download BPB Stable Release
         run: |
-          PRIMARY_URL="https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/download/v4.0.1/worker.js"
-          FALLBACK_URLS=(
-            "https://raw.githubusercontent.com/bia-pain-bache/BPB-Worker-Panel/main/build/unobfuscated-worker.js"
-            "https://cdn.jsdelivr.net/gh/bia-pain-bache/BPB-Worker-Panel@main/build/unobfuscated-worker.js"
-            "https://ghproxy.com/https://raw.githubusercontent.com/bia-pain-bache/BPB-Worker-Panel/main/build/unobfuscated-worker.js"
-          )
-
-          echo "Downloading worker.js"
-          if curl -fsSL "$PRIMARY_URL" -o origin.js; then
-            echo "Primary OK"
-          else
-            OK=false
-            for u in "${FALLBACK_URLS[@]}"; do
-              if curl -fsSL "$u" -o origin.js; then
-                OK=true
-                break
-              fi
-            done
-            if [ "$OK" != "true" ]; then
-              echo "Download failed"
-              exit 1
-            fi
+          # 策略调整：为了稳定，我们不再盲目下载 main 分支，而是获取最新的 Release 正式版
+          # 使用 GitHub API 获取最新发布的 tag
+          LATEST_URL=$(curl -s https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases/latest | grep "browser_download_url.*worker.js" | cut -d : -f 2,3 | tr -d \")
+          
+          echo "Detected Latest Stable Release URL: $LATEST_URL"
+          
+          if [ -z "$LATEST_URL" ]; then
+             echo "Failed to fetch latest release URL. Using fallback."
+             # 备用方案：如果 API 失败，使用固定的稳定链接（你可以手动更新这个版本号）
+             LATEST_URL="https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/download/v4.4.4/worker.js"
           fi
 
-      - name: Stage 1 Obfuscation
-        run: |
-          npx javascript-obfuscator origin.js \
-            --output stage1.js \
-            --compact false \
-            --dead-code-injection true \
-            --dead-code-injection-threshold 0.2 \
-            --string-array true \
-            --string-array-threshold 1 \
-            --identifier-names-generator hexadecimal \
-            --seed 9527
+          echo "Downloading..."
+          curl -fsSL "$LATEST_URL" -o origin.js
 
-      - name: Stage 2 Obfuscation
+          # 验证下载是否成功
+          if [ ! -s origin.js ]; then
+            echo "Download failed or file is empty."
+            exit 1
+          fi
+
+      - name: Obfuscate (Performance Mode)
         run: |
-          npx javascript-obfuscator stage1.js \
+          # ⚡ 关键调整：高稳定性混淆配置
+          # 1. 移除了 control-flow-flattening (极耗CPU，易导致断流)
+          # 2. 移除了 dead-code-injection (增加体积，拖慢加载)
+          # 3. 保留 identifier renaming 和 string array (基础保护)
+          
+          npx javascript-obfuscator origin.js \
             --output _worker.js \
             --compact true \
-            --control-flow-flattening true \
-            --control-flow-flattening-threshold 0.9 \
+            --simplify true \
             --string-array true \
-            --string-array-encoding rc4 \
-            --string-array-threshold 1 \
-            --numbers-to-expressions true \
-            --unicode-escape-sequence true \
-            --seed 9527
+            --string-array-threshold 0.75 \
+            --string-array-encoding 'base64' \
+            --split-strings true \
+            --rename-globals false \
+            --identifier-names-generator hexadecimal \
+            --target browser \
+            --seed 0 \
+            --disable-console-output true
+
+      - name: Verify Integrity
+        run: |
+          # 确保生成的文件存在且大小合理
+          SIZE=$(wc -c < _worker.js)
+          echo "Final script size: $SIZE bytes"
+          
+          # BPB 面板通常在 500KB - 900KB 之间，如果太小说明出错了
+          if [ "$SIZE" -lt 10000 ]; then
+            echo "Error: File too small, something went wrong."
+            exit 1
+          fi
 
       - name: Commit Result
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "build: obfuscated BPB worker"
+          commit_message: "build: stable optimized worker [skip ci]"
+          file_pattern: "_worker.js"
