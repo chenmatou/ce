@@ -5,7 +5,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: "0 2 * * *" # 每天凌晨2点运行，避开高峰期
+    - cron: "0 2 * * *" # 每天凌晨2点运行
 
 permissions:
   contents: write
@@ -30,33 +30,36 @@ jobs:
 
       - name: Download BPB Stable Release
         run: |
-          # 策略调整：为了稳定，我们不再盲目下载 main 分支，而是获取最新的 Release 正式版
-          # 使用 GitHub API 获取最新发布的 tag
-          LATEST_URL=$(curl -s https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases/latest | grep "browser_download_url.*worker.js" | cut -d : -f 2,3 | tr -d \")
+          # 修复点：使用 jq 工具精确提取 JSON 中的 URL，自动去除所有空格和引号
+          LATEST_URL=$(curl -s https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases/latest | jq -r '.assets[] | select(.name=="worker.js") | .browser_download_url')
           
-          echo "Detected Latest Stable Release URL: $LATEST_URL"
+          # 打印清洗后的 URL 以便调试
+          echo "Clean URL: '$LATEST_URL'"
           
-          if [ -z "$LATEST_URL" ]; then
-             echo "Failed to fetch latest release URL. Using fallback."
-             # 备用方案：如果 API 失败，使用固定的稳定链接（你可以手动更新这个版本号）
-             LATEST_URL="https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/download/v4.4.4/worker.js"
+          # 如果 API 获取失败（为空或为 null），则使用备用链接
+          if [ -z "$LATEST_URL" ] || [ "$LATEST_URL" == "null" ]; then
+             echo "Failed to fetch from API. Using fallback."
+             # 这里的备用链接指向 v4.1.0 (根据你之前的日志)，你可以随时改为更新的版本号
+             LATEST_URL="https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/download/v4.1.0/worker.js"
           fi
 
-          echo "Downloading..."
+          echo "Downloading from: $LATEST_URL"
+          
+          # -L 跟随重定向，-f 失败时不写入文件
           curl -fsSL "$LATEST_URL" -o origin.js
 
-          # 验证下载是否成功
+          # 验证文件是否存在且不为空
           if [ ! -s origin.js ]; then
-            echo "Download failed or file is empty."
+            echo "Error: Download failed or file is empty."
             exit 1
           fi
 
       - name: Obfuscate (Performance Mode)
         run: |
-          # ⚡ 关键调整：高稳定性混淆配置
-          # 1. 移除了 control-flow-flattening (极耗CPU，易导致断流)
-          # 2. 移除了 dead-code-injection (增加体积，拖慢加载)
-          # 3. 保留 identifier renaming 和 string array (基础保护)
+          # 高稳定性混淆配置
+          # 1. 移除 control-flow-flattening 防止 CPU 超时断流
+          # 2. 移除 dead-code-injection 减小体积
+          # 3. 启用 simplify 优化代码结构
           
           npx javascript-obfuscator origin.js \
             --output _worker.js \
@@ -69,16 +72,15 @@ jobs:
             --rename-globals false \
             --identifier-names-generator hexadecimal \
             --target browser \
-            --seed 0 \
             --disable-console-output true
 
       - name: Verify Integrity
         run: |
-          # 确保生成的文件存在且大小合理
+          # 确保生成的文件大小合理 (Cloudflare 限制 1MB)
           SIZE=$(wc -c < _worker.js)
           echo "Final script size: $SIZE bytes"
           
-          # BPB 面板通常在 500KB - 900KB 之间，如果太小说明出错了
+          # 如果文件太小（小于10KB），说明生成失败
           if [ "$SIZE" -lt 10000 ]; then
             echo "Error: File too small, something went wrong."
             exit 1
