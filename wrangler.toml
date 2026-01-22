@@ -1,0 +1,19 @@
+# 这里的名字必须小写，不能有空格
+name = "bpb-panel"
+main = "_worker.js"
+compatibility_date = "2024-06-01"
+
+# --- 关键配置：KV 数据库绑定 ---
+# 如果不写这块，你的面板就存不了数据，节点也导入不了
+[[kv_namespaces]]
+binding = "BPB"
+# 👇👇👇 下面这个 ID 必须去 Cloudflare 后台复制 👇👇👇
+id = "06619435d7754a82ba0011a6ce1530c4"
+
+# --- 变量设置 ---
+[vars]
+# 你的 UUID (建议填在这里，这样部署最稳)
+UUID = "7a22c73d-ae95-48e4-91f2-14bbec0c725d"
+
+# 优选域名/IP (不填就是默认)
+PROXYIP = "bestcf.030101.xyz"
