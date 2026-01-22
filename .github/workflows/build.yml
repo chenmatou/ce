@@ -1,11 +1,13 @@
-name: Build Stable BPB Panel
+name: Build BPB Panel (Stable & Fast)
 
 on:
   push:
     branches:
       - main
   schedule:
-    - cron: "0 2 * * *" # 每天凌晨2点运行
+    # 每天凌晨 1:00 (UTC) 自动检查更新
+    - cron: "0 1 * * *"
+  workflow_dispatch: # 允许手动点按钮运行
 
 permissions:
   contents: write
@@ -15,79 +17,58 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install obfuscator
+      - name: 下载最新版代码 (跳过混淆)
         run: |
-          npm init -y
-          npm install javascript-obfuscator@4.1.0
+          # 定义上游仓库和文件名
+          REPO="bia-pain-bache/BPB-Worker-Panel"
+          ASSET_NAME="worker.js"
 
-      - name: Download BPB Stable Release
-        run: |
-          # 修复点：使用 jq 工具精确提取 JSON 中的 URL，自动去除所有空格和引号
-          LATEST_URL=$(curl -s https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases/latest | jq -r '.assets[] | select(.name=="worker.js") | .browser_download_url')
-          
-          # 打印清洗后的 URL 以便调试
-          echo "Clean URL: '$LATEST_URL'"
-          
-          # 如果 API 获取失败（为空或为 null），则使用备用链接
-          if [ -z "$LATEST_URL" ] || [ "$LATEST_URL" == "null" ]; then
-             echo "Failed to fetch from API. Using fallback."
-             # 这里的备用链接指向 v4.1.0 (根据你之前的日志)，你可以随时改为更新的版本号
-             LATEST_URL="https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/download/v4.1.0/worker.js"
+          echo "🚀 开始获取最新版本..."
+
+          # 1. 优先尝试从 GitHub Release 获取最新构建版
+          # Release 版本通常是经过测试的稳定版
+          PRIMARY_URL=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" \
+            | grep "browser_download_url" \
+            | grep "$ASSET_NAME" \
+            | cut -d '"' -f 4)
+
+          # 2. 备用下载地址 (直接指向源码仓库的未混淆文件)
+          FALLBACK_URLS=(
+            "https://raw.githubusercontent.com/bia-pain-bache/BPB-Worker-Panel/main/build/unobfuscated-worker.js"
+            "https://cdn.jsdelivr.net/gh/bia-pain-bache/BPB-Worker-Panel@main/build/unobfuscated-worker.js"
+          )
+
+          # 执行下载逻辑：直接保存为 _worker.js
+          if [ -n "$PRIMARY_URL" ] && wget -O _worker.js "$PRIMARY_URL"; then
+            echo "✅ Release 版本下载成功！(来源: Release)"
+          else
+            echo "⚠️ Release 获取失败，尝试备用源码地址..."
+            SUCCESS=false
+            for url in "${FALLBACK_URLS[@]}"; do
+              if wget -O _worker.js "$url"; then
+                echo "✅ 备用源下载成功！(来源: $url)"
+                SUCCESS=true
+                break
+              fi
+            done
+            
+            # 如果所有地址都失败，则报错停止
+            if [ "$SUCCESS" = false ] || [ ! -s _worker.js ]; then
+              echo "❌ 所有下载源均失败，任务中止。"
+              exit 1
+            fi
           fi
 
-          echo "Downloading from: $LATEST_URL"
-          
-          # -L 跟随重定向，-f 失败时不写入文件
-          curl -fsSL "$LATEST_URL" -o origin.js
+          echo "🎉 下载完成！文件大小: $(wc -c < _worker.js) 字节"
+          echo "提示：已跳过所有混淆步骤，以确保 Cloudflare Worker 运行最稳定。"
 
-          # 验证文件是否存在且不为空
-          if [ ! -s origin.js ]; then
-            echo "Error: Download failed or file is empty."
-            exit 1
-          fi
-
-      - name: Obfuscate (Performance Mode)
-        run: |
-          # 高稳定性混淆配置
-          # 1. 移除 control-flow-flattening 防止 CPU 超时断流
-          # 2. 移除 dead-code-injection 减小体积
-          # 3. 启用 simplify 优化代码结构
-          
-          npx javascript-obfuscator origin.js \
-            --output _worker.js \
-            --compact true \
-            --simplify true \
-            --string-array true \
-            --string-array-threshold 0.75 \
-            --string-array-encoding 'base64' \
-            --split-strings true \
-            --rename-globals false \
-            --identifier-names-generator hexadecimal \
-            --target browser \
-            --disable-console-output true
-
-      - name: Verify Integrity
-        run: |
-          # 确保生成的文件大小合理 (Cloudflare 限制 1MB)
-          SIZE=$(wc -c < _worker.js)
-          echo "Final script size: $SIZE bytes"
-          
-          # 如果文件太小（小于10KB），说明生成失败
-          if [ "$SIZE" -lt 10000 ]; then
-            echo "Error: File too small, something went wrong."
-            exit 1
-          fi
-
-      - name: Commit Result
+      - name: 提交并推送更改
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "build: stable optimized worker [skip ci]"
-          file_pattern: "_worker.js"
+          branch: main
+          commit_message: 'Update: 部署纯净版 _worker.js (性能优化版)'
+          commit_author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
+          push_options: '--set-upstream'
