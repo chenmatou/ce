@@ -1,13 +1,12 @@
-name: Build BPB Panel (Stable & Fast)
+name: Cleanup and Fix BPB (Final)
 
 on:
   push:
     branches:
       - main
   schedule:
-    # 每天凌晨 1:00 (UTC) 自动检查更新
     - cron: "0 1 * * *"
-  workflow_dispatch: # 允许手动点按钮运行
+  workflow_dispatch: # 允许手动运行
 
 permissions:
   contents: write
@@ -20,55 +19,49 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 下载最新版代码 (跳过混淆)
+      - name: 🗑️ 清理旧的混淆垃圾文件
         run: |
-          # 定义上游仓库和文件名
-          REPO="bia-pain-bache/BPB-Worker-Panel"
-          ASSET_NAME="worker.js"
+          echo "开始清理旧版本的中间文件..."
+          # 删除之前的下载源文件
+          rm -f origin.js
+          # 删除之前的一阶段混淆文件
+          rm -f stage1.js
+          echo "✅ 垃圾文件清理完毕"
 
-          echo "🚀 开始获取最新版本..."
+      - name: 📥 下载官方 Release 纯净版
+        run: |
+          # 设定目标文件名
+          TARGET_FILE="_worker.js"
+          
+          # 强制使用 GitHub Release 的下载链接（最稳定，无混淆）
+          DOWNLOAD_URL="https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/latest/download/worker.js"
 
-          # 1. 优先尝试从 GitHub Release 获取最新构建版
-          # Release 版本通常是经过测试的稳定版
-          PRIMARY_URL=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" \
-            | grep "browser_download_url" \
-            | grep "$ASSET_NAME" \
-            | cut -d '"' -f 4)
+          echo "正在下载纯净版: $DOWNLOAD_URL"
 
-          # 2. 备用下载地址 (直接指向源码仓库的未混淆文件)
-          FALLBACK_URLS=(
-            "https://raw.githubusercontent.com/bia-pain-bache/BPB-Worker-Panel/main/build/unobfuscated-worker.js"
-            "https://cdn.jsdelivr.net/gh/bia-pain-bache/BPB-Worker-Panel@main/build/unobfuscated-worker.js"
-          )
-
-          # 执行下载逻辑：直接保存为 _worker.js
-          if [ -n "$PRIMARY_URL" ] && wget -O _worker.js "$PRIMARY_URL"; then
-            echo "✅ Release 版本下载成功！(来源: Release)"
+          # 下载并跟随重定向
+          if wget -O temp_code.js -L "$DOWNLOAD_URL"; then
+            echo "✅ 下载成功"
           else
-            echo "⚠️ Release 获取失败，尝试备用源码地址..."
-            SUCCESS=false
-            for url in "${FALLBACK_URLS[@]}"; do
-              if wget -O _worker.js "$url"; then
-                echo "✅ 备用源下载成功！(来源: $url)"
-                SUCCESS=true
-                break
-              fi
-            done
-            
-            # 如果所有地址都失败，则报错停止
-            if [ "$SUCCESS" = false ] || [ ! -s _worker.js ]; then
-              echo "❌ 所有下载源均失败，任务中止。"
-              exit 1
-            fi
+            echo "❌ 下载失败"
+            exit 1
           fi
 
-          echo "🎉 下载完成！文件大小: $(wc -c < _worker.js) 字节"
-          echo "提示：已跳过所有混淆步骤，以确保 Cloudflare Worker 运行最稳定。"
+          # 文件校验：防止下载到空文件或错误页面
+          FILE_SIZE=$(wc -c < temp_code.js)
+          if [ "$FILE_SIZE" -lt 1000 ]; then
+             echo "❌ 错误：文件过小，可能是无效文件。"
+             rm temp_code.js
+             exit 1
+          fi
 
-      - name: 提交并推送更改
+          # 覆盖旧的混淆文件
+          mv temp_code.js $TARGET_FILE
+          echo "🎉 修复完成！当前 _worker.js 是纯净版 (大小: $FILE_SIZE 字节)"
+
+      - name: 🚀 提交更改 (修复版)
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           branch: main
-          commit_message: 'Update: 部署纯净版 _worker.js (性能优化版)'
+          commit_message: 'Fix: 清理混淆垃圾 + 部署纯净版 (解决无法导入问题)'
           commit_author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
           push_options: '--set-upstream'
