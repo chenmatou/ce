@@ -1,12 +1,12 @@
-name: Cleanup and Fix BPB (Final)
+name: Deploy BPB Panel
 
 on:
   push:
     branches:
       - main
   schedule:
-    - cron: "0 1 * * *"
-  workflow_dispatch: # 允许手动运行
+    - cron: "0 1 * * *" # 每天自动更新
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -19,49 +19,35 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 🗑️ 清理旧的混淆垃圾文件
+      - name: 下载官方纯净版代码
         run: |
-          echo "开始清理旧版本的中间文件..."
-          # 删除之前的下载源文件
-          rm -f origin.js
-          # 删除之前的一阶段混淆文件
-          rm -f stage1.js
-          echo "✅ 垃圾文件清理完毕"
-
-      - name: 📥 下载官方 Release 纯净版
-        run: |
-          # 设定目标文件名
-          TARGET_FILE="_worker.js"
-          
-          # 强制使用 GitHub Release 的下载链接（最稳定，无混淆）
+          # 强制下载官方 Release 版本，确保 100% 稳定
           DOWNLOAD_URL="https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/latest/download/worker.js"
-
-          echo "正在下载纯净版: $DOWNLOAD_URL"
-
-          # 下载并跟随重定向
-          if wget -O temp_code.js -L "$DOWNLOAD_URL"; then
-            echo "✅ 下载成功"
+          
+          echo "正在从 $DOWNLOAD_URL 下载..."
+          
+          if wget -O _worker.js -L "$DOWNLOAD_URL"; then
+            echo "✅ 代码下载成功"
           else
             echo "❌ 下载失败"
             exit 1
           fi
 
-          # 文件校验：防止下载到空文件或错误页面
-          FILE_SIZE=$(wc -c < temp_code.js)
-          if [ "$FILE_SIZE" -lt 1000 ]; then
-             echo "❌ 错误：文件过小，可能是无效文件。"
-             rm temp_code.js
+          # 简单校验
+          if [ $(wc -c < _worker.js) -lt 1000 ]; then
+             echo "❌ 文件太小，可能是无效文件"
              exit 1
           fi
 
-          # 覆盖旧的混淆文件
-          mv temp_code.js $TARGET_FILE
-          echo "🎉 修复完成！当前 _worker.js 是纯净版 (大小: $FILE_SIZE 字节)"
+      - name: 清理垃圾文件
+        run: |
+          # 删除以前可能存在的混淆文件，保持仓库干净
+          rm -f origin.js stage1.js
 
-      - name: 🚀 提交更改 (修复版)
+      - name: 提交并推送
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           branch: main
-          commit_message: 'Fix: 清理混淆垃圾 + 部署纯净版 (解决无法导入问题)'
+          commit_message: 'Deploy: 更新纯净版 _worker.js'
           commit_author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
           push_options: '--set-upstream'
